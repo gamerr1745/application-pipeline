@@ -1,0 +1,618 @@
+pr:
+  branches:
+    include:
+      - ADF
+      - Snyk1
+      - Snyk2
+      - Snyk3
+      
+variables:
+- template: values.yaml
+
+stages:
+- stage: Build
+  displayName: 'Build Stage'
+  pool:
+    vmImage: ubuntu-latest
+
+  jobs:
+  # - job: SonarQube_Scan
+  #   pool: singularity-agent-pool
+  #   displayName: Sonar Analysis
+  #   steps:   
+
+  #   - script: 
+  #       sudo apt-get -y install unzip && 
+  #       npm cache clean --force
+  #       pip install coverage
+
+  #   - task: SonarQubePrepare@7
+  #     inputs:
+  #       SonarQube: 'Singularity-Sonar-4'
+  #       scannerMode: 'CLI'
+  #       configMode: 'manual'
+  #       cliProjectKey: '${{ variables.projectKey }}'
+  #       cliProjectName: '${{ variables.projectName }}'
+  #       cliSources: '.'
+  #       extraProperties: |
+  #         # sonar.exclusions=**/*.bin
+  #         sonar.sources=.
+
+  #   #--------- Run Code Analysis task ---------
+  #   - task: SonarQubeAnalyze@7
+  #     inputs:
+  #       jdkversion: 'JAVA_HOME'
+
+
+  #   #-------Publish Quality Gate Result task--------
+  #   - task: SonarQubePublish@7
+  #     inputs:
+  #       pollingTimeoutSec: '300' 
+
+  - job: Build
+    # dependsOn: SonarQube_Scan
+    strategy:
+      matrix:
+        Python37:
+          PYTHON_VERSION: '3.10'
+    displayName: 'Build for Dev'
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(PYTHON_VERSION)'
+        architecture: 'x64'
+
+    - script: |
+        python -m pip install --upgrade pip setuptools wheel
+        pip install -r requirements.txt
+        pip list
+        pip install unittest-xml-reporting
+        pip install in-toto
+      displayName: 'Install prerequisites'
+
+    - script: |
+        cp -r functionary/* owner
+        cd owner
+        python3 create_layout.py
+        cd ..
+      displayName: Create root file for intoto
+      enabled: ${{ variables.intototask }}
+
+    # - task: SonarQubeAnalyze@6
+    #   enabled: ${{ variables.sonartask }}
+
+    # - task: SonarQubePublish@6
+    #   inputs:
+    #     pollingTimeoutSec: '300'
+    #   enabled: ${{ variables.sonartask }}
+      
+
+    # - task: PowerShell@2
+    #   displayName: Sonar Approval Gate
+    #   inputs:
+    #     filePath: '$(System.DefaultWorkingDirectory)/sonar.ps1'
+    #     arguments: '-SonarServerName ${{ variables.SonarServerName }} -SonarProjectKey python -SonarToken ${{ variables.SonarToken }} '
+    #   enabled: ${{ variables.sonartask }}
+    #   continueOnError: true
+   
+
+    - task: SnykSecurityScan@1
+      displayName: Snyk Dependency Scan
+      inputs:
+        serviceConnectionEndpoint: '${{ variables.snyk_service_connection }}'
+        testType: 'app'
+        severityThreshold: '${{variables.snyk_severity}}'
+        monitorWhen: 'always'
+        failOnIssues: false
+        additionalArguments: '--all-projects'
+      enabled: ${{ variables.snykdependencytask }}
+
+    - task: SnykSecurityScan@1
+      displayName: Snyk SAST (Code Scan)
+      inputs:
+        serviceConnectionEndpoint: '${{ variables.snyk_service_connection }}'
+        testType: 'code'
+        monitorWhen: 'always'
+        failOnIssues: false
+        severityThreshold: '${{ variables.snyk_severity }}'
+      enabled: ${{ variables.snyksasttask }}
+
+    - task: Docker@2
+      displayName: Docker Image Build
+      inputs:
+        containerRegistry: ${{ variables.docker_build_conn }}
+        repository: ${{ variables.docker_repo }}
+        command: 'build'
+        Dockerfile: '**/Dockerfile'
+        tags: '$(Build.BuildId)'
+        addPipelineData: false
+        addBaseImageData: false
+    
+    - task: SnykSecurityScan@1
+      displayName: Snyk Docker Scan
+      inputs:
+        serviceConnectionEndpoint: '${{ variables.snyk_service_connection }}'
+        testType: 'container'
+        dockerImageName: '${{ variables.aqua_trivy_image }}'
+        severityThreshold: '${{ variables.snyk_docker_severity }}'
+        monitorWhen: 'always'
+        failOnIssues: true
+      enabled: ${{ variables.snykdockertask }}
+
+    - task: CmdLine@2
+      displayName: Grype Image Scanning
+      inputs:
+        script: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+          grype ${{ variables.aqua_trivy_image }} --fail-on ${{ variables.grype_severity }} --only-fixed -o table
+      enabled: ${{ variables.grypetask }}
+
+    - ${{ if eq(variables.trivy_intoto, 'false') }}:
+      - task: Bash@3
+        displayName: Trivy Quality Gate
+        inputs:
+          targetType: 'inline'
+          script: |
+            sudo apt-get install wget apt-transport-https gnupg lsb-release
+            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+            echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+            sudo apt-get update
+            sudo apt-get install trivy
+            trivy image --exit-code 1 --severity ${{ variables.aqua_severity }} --ignore-unfixed ${{ variables.aqua_trivy_image }}
+        enabled: ${{ variables.aquatrivytask }}
+        
+    - ${{ else }}:
+      - script: |
+          sudo apt-get install wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy
+          export IN_TOTO_LINK_CMD_EXEC_TIMEOUT=''50''
+          in-toto-run --key functionary/${{ variables.trivy_key }} --materials . --products . --step-name trivy -- trivy image --exit-code 1 --severity ${{ variables.aqua_severity }} --ignore-unfixed ${{ variables.aqua_trivy_image }} --link-cmd-exec-timeout 60
+          trivy image --exit-code 1 --severity ${{ variables.aqua_severity }} --ignore-unfixed ${{ variables.aqua_trivy_image }}
+        enabled: ${{ variables.aquatrivytask }}
+        displayName: Trivy Quality Gate
+
+    - ${{ if eq(variables.docker_intoto, 'false') }}:
+      - task: Docker@2
+        displayName: Docker Image Push
+        inputs:
+          containerRegistry: '${{ variables.docker_build_conn }}'
+          repository: '${{ variables.docker_repo }}'
+          command: 'push'
+          tags: '$(Build.BuildId)'
+          addPipelineData: false
+          addBaseImageData: false
+    - ${{ else }}:
+      - task: Docker@2
+        inputs:
+          containerRegistry: '${{ variables.docker_build_conn }}'
+          command: 'login'
+        displayName: docker login
+      - script: |
+          export IN_TOTO_LINK_CMD_EXEC_TIMEOUT=''30''
+          in-toto-run --key functionary/${{ variables.docker_key }} --materials . --products . --step-name docker -- docker push ${{variables.aqua_trivy_image}} --link-cmd-exec-timeout 60
+        displayName: docker image push
+    - task: CmdLine@2
+      displayName: Image Name Update on Helm
+      inputs:
+        script: |
+          sed "s|appimages|$(aqua_trivy_image)|g" $(System.DefaultWorkingDirectory)/$(helm_name_Int) > $(System.DefaultWorkingDirectory)/deployment-tmp.yaml
+          rm $(System.DefaultWorkingDirectory)/$(helm_name_Int)
+          mv $(System.DefaultWorkingDirectory)/deployment-tmp.yaml $(System.DefaultWorkingDirectory)/$(helm_name_Int)
+    # - task: CmdLine@2
+    #   displayName: Image Name Update on Helm
+    #   inputs:
+    #     script: |
+    #       sed "s|appimages|$(aqua_trivy_image)|g" $(System.DefaultWorkingDirectory)/$(helm_name_QA) > $(System.DefaultWorkingDirectory)/deployment-tmp.yaml
+    #       rm $(System.DefaultWorkingDirectory)/$(helm_name_QA)
+    #       mv $(System.DefaultWorkingDirectory)/deployment-tmp.yaml $(System.DefaultWorkingDirectory)/$(helm_name_QA)
+    # - task: CmdLine@2
+    #   displayName: Image Name Update on Helm
+    #   inputs:
+    #     script: |
+    #       sed "s|appimages|$(aqua_trivy_image)|g" $(System.DefaultWorkingDirectory)/$(helm_name_Prod) > $(System.DefaultWorkingDirectory)/deployment-tmp.yaml
+    #       rm $(System.DefaultWorkingDirectory)/$(helm_name_Prod)
+    #       mv $(System.DefaultWorkingDirectory)/deployment-tmp.yaml $(System.DefaultWorkingDirectory)/$(helm_name_Prod)
+
+    - ${{ if eq(variables.checkov_intoto, 'false') }}:
+      - task: CmdLine@2
+        displayName: Checkov Scan
+        inputs:
+          script: |
+            pip install pip --upgrade
+            pip install pyopenssl --upgrade
+            pip3 install checkov
+            checkov -f $(helm_name_Int) -c $(checkov_policies)  --output junitxml > $(System.DefaultWorkingDirectory)/TEST-checkov-report.xml
+            checkov -f $(helm_name_QA) -c $(checkov_policies)
+            checkov -f $(helm_name_Prod) -c $(checkov_policies)
+        enabled: ${{ variables.checkovtask }}
+      - task: PublishTestResults@2
+        displayName: 'Publish checkov Test Results'
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFormat: 'JUnit'
+          testResultsFile: '**/TEST-checkov-report.xml'
+          searchFolder: '$(System.DefaultWorkingDirectory)'
+          mergeTestResults: false
+          failTaskOnFailedTests: false
+          testRuntitle: Checkov scan test
+        enabled: ${{ variables.checkovtask }}
+        
+    - ${{ else }}:
+      - script: |
+          pip install pip --upgrade
+          pip install pyopenssl --upgrade
+          pip3 install checkov
+
+          export IN_TOTO_LINK_CMD_EXEC_TIMEOUT=''30''
+          in-toto-run --key functionary/${{ variables.checkov_key }} --materials . --products . --step-name checkov -- checkov -f ${{ variables.helm_name_dev }} -f ${{ variables.helm_name_qa }} -f ${{ variables.helm_name_prod }} -c ${{ variables.checkov_policies }}
+          checkov -f $(helm_name_Int) -c $(checkov_policies)
+          checkov -f $(helm_name_QA) -c $(checkov_policies)
+          checkov -f $(helm_name_Prod) -c $(checkov_policies)
+
+        enabled: ${{ variables.checkovtask }}
+        displayName: Checkov Scan
+
+    - script: |
+        ls
+        cp *.link owner
+      displayName: copy link files for verification
+      enabled: ${{ variables.intototask }}
+    - script: |
+        python -m pip install --upgrade pip
+        pip install requests
+      displayName: 'Install Python packages'
+      condition: failed()
+            
+    - ${{ if eq(variables.boards, 'true') }}:
+      - task: CreateWorkItem@1
+        displayName: WorkItem Create On Task Fail
+        inputs:
+          teamProject: '$(System.TeamProject)'
+          workItemType: 'Issue'
+          title: 'Build failed in $(Build.BuildNumber)'
+          #assignedTo: $(Build.RequestedForId)
+          assignedTo: '${{ variables.bug_person_name }} ${{ variables.bug_person_email }}'
+          areaPath: '$(System.TeamProject)'
+          iterationPath: '$(System.TeamProject)'
+          associate: true
+          linkWorkItems: true
+          linkType: 'Microsoft.VSTS.Common.Affects-Reverse'
+          linkTarget: 'associate'
+          addAttachments: true
+          attachments: '**/*.log'
+          createOutputs: true
+          outputVariables: |
+            WorkItemUrl = CWI.WorkItemUrl
+            Description = Description
+        condition: failed()
+    - ${{ if eq(variables.jira, 'true') }}:
+      - task: PythonScript@0
+        displayName: JIRA bug On Task Fail
+        inputs:
+          scriptSource: 'inline'
+          script: |
+            import requests
+
+            def create_jira_bug():
+                # Jira API endpoint for creating an issue
+                jira_url = "https://${{ variables.JiraDomain }}/rest/api/2/issue/"
+
+                # Jira API credentials
+                username = "${{ variables.JiraUsername }}"
+                api_token = "${{ variables.JiraApiToken }}"
+
+                # Jira project key
+                project_key = "${{ variables.JiraProjectKey }}"
+
+                # Assignee username or account ID
+                assignee = "${{ variables.JiraAssigneeUsername }}"
+
+                # Bug details
+                summary = "BUILD FAILED IN AZURE DEVOPS FOR $(Build.Repository.Name)"
+                description = "$(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)&view=results"
+
+                # Create the payload
+                payload = {
+                    "fields": {
+                        "project": {
+                            "key": project_key
+                        },
+                        "summary": summary,
+                        "description": description,
+                        "issuetype": {
+                            "name": "Bug"
+                        },
+                        "assignee": {
+                            "accountId": assignee
+                        }
+                    }
+                }
+
+                # Set the request headers
+                headers = {
+                    "Content-Type": "application/json"
+                }
+
+                # Encode the credentials
+                credentials = (username, api_token)
+
+                # Send the POST request to create the bug
+                response = requests.post(jira_url, json=payload, headers=headers, auth=credentials)
+
+                if response.status_code == 201:
+                    print("Jira bug created successfully.")
+                    issue_key = response.json()["key"]
+                    print("Issue Key:", issue_key)
+                else:
+                    print("Failed to create Jira bug.")
+                    print("Status Code:", response.status_code)
+                    print("Error Response:", response.text)
+
+            # Call the function to create a Jira bug
+            create_jira_bug()
+        condition: failed()
+    - ${{ if eq(variables.ServiceNow, 'true') }}:
+      - task: PythonScript@0
+        displayName: ServiceNow Ticket On Task Fail
+        inputs:
+          scriptSource: 'inline'
+          script: |
+            import requests
+            import base64
+            # Set your ServiceNow instance URL, username, and password
+            service_now_instance = "${{ variables.url }}"
+            username = "${{ variables.username }}"
+            password = "${{ variables.password }}"
+            # Define API endpoint and headers
+            api_endpoint = "incident.do?JSONv2"
+            url = f"{service_now_instance}/{api_endpoint}"
+            headers = {
+                "Authorization": "Basic " + base64.b64encode(f"{username}:{password}".encode('ascii')).decode('ascii'),
+                "Content-Type": "application/json"
+            }
+            # Define payload for request
+            payload = {
+                "sysparm_action": "insert",
+                "category": "AzureDevOps",
+                "impact": "2",
+                "urgency": "2",
+                "short_description": "Automated ticket Short Description",
+                "description": "Automated ticket Description",
+                "cmdb_ci": "Azure DevOps",
+                "caller_id": "${{ variables.reporter }}",
+                "contact_type": "Email",
+                "assigned_to": "${{ variables.assignedto }}"
+            }
+            # Make the POST request
+            response = requests.post(url, json=payload, headers=headers)
+            # Print the response in JSON format
+            print(response.json())
+        condition: failed()
+    - task: CopyFiles@2
+      displayName: Copy_selenium
+      inputs:
+        SourceFolder: '${{ variables.selenium_folder }}'
+        Contents: '**'
+        TargetFolder: '$(build.artifactstagingdirectory)/${{ variables.selenium_folder }}'
+      enabled: ${{ variables.selenium }}
+    - task: CopyFiles@2
+      displayName: Copy_OWASP
+      inputs:
+        Contents: OWASPToNUnit3.xslt
+        TargetFolder: '$(build.artifactstagingdirectory)'
+    - task: CopyFiles@2
+      displayName: Copy_helm_Int
+      inputs:
+        Contents: $(helm_name_Int)
+        TargetFolder: '$(build.artifactstagingdirectory)'
+    - task: CopyFiles@2
+      displayName: Copy_helm_QA
+      inputs:
+        Contents: $(helm_name_QA)
+        TargetFolder: '$(build.artifactstagingdirectory)'
+    - task: CopyFiles@2
+      displayName: Copy_helm_Prod
+      inputs:
+        Contents: $(helm_name_Prod)
+        TargetFolder: '$(build.artifactstagingdirectory)'
+
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: 'owner'
+        Contents: '*'
+        TargetFolder: '$(build.artifactstagingdirectory)'
+      enabled: ${{ variables.intototask }}
+    - task: CopyFiles@2
+      inputs:
+        Contents: requirements.txt
+        TargetFolder: '$(build.artifactstagingdirectory)'
+      enabled: ${{ variables.intototask }}
+    
+    - task: CopyFiles@2
+      displayName: Configfile_Int
+      inputs:
+        Contents: config.yaml
+        TargetFolder: '$(build.artifactstagingdirectory)'
+      enabled: ${{ variables.Int_LoadTest }}
+    
+    - task: CopyFiles@2
+      displayName: Copy_url_test
+      inputs:
+        Contents: url_test.jmx
+        TargetFolder: '$(build.artifactstagingdirectory)'
+      #enabled: ${{ variables.intototask }}
+    
+    - task: CopyFiles@2
+      displayName: Configfile_QA
+      inputs:
+        Contents: config.yaml
+        TargetFolder: '$(build.artifactstagingdirectory)'
+      enabled: ${{ variables.QA_LoadTest }}
+    
+    - task: CopyFiles@2
+      displayName: Configfile_Prod
+      inputs:
+        Contents: config.yaml
+        TargetFolder: '$(build.artifactstagingdirectory)'
+      enabled: ${{ variables.Prod_LoadTest }}
+
+    - task: CopyFiles@2
+      displayName: OWASP
+      inputs:
+        Contents: OWASPToNUnit3.xslt
+        TargetFolder: '$(build.artifactstagingdirectory)'
+
+
+    - bash: |
+        cd /home/vsts/work/_tasks/EmailReport_36fd41b1-8024-4ce9-a5a0-53c3e54ed105/1.1.10
+        cp ./index.js ./Index.js
+        sed -i -e "s~\\\\\\\\~/~" ./htmlreport/HTMLReportCreator.js
+        sed -i -e "s~\\\\\\\\~/~" ./model/helpers/LinkHelper.js
+
+      displayName: 'Bash Script to fix Email Report'
+      condition: succeededOrFailed()
+      enabled: ${{ variables.emailtask }}
+
+    - task: EmailReport@1
+      inputs:
+        sendMailConditionConfig: 'Always'
+        subject: 'DOTNET pipeline status for Build $(Build.BuildNumber)'
+        toAddress: '${{ variables.Toaddress }}'
+        defaultDomain: 'microsoft.com'
+        groupTestResultsBy: 'run'
+        includeCommits: true
+        maxTestFailuresToShow: '15'
+        includeOthersInTotal: false
+        usePreviousEnvironment: false
+        smtpConnectionEndpoint: 'email_service_endpoint'
+      condition: succeededOrFailed()
+      enabled: ${{ variables.emailtask }}
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(build.artifactstagingdirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+      condition: succeeded()
+
+
+
+- stage: DEV
+  dependsOn: Build
+  jobs:
+    - template: deployment_template/rolling.yaml
+      parameters:
+        environmentName: DEV
+        approver: $(Int_approver)
+        kubernetes_service_connection: $(Int_kubernetes_service_connection)
+        namespace: $(Int_namespace)
+        deployment_file: $(helm_name_Int)
+        docker_build_conn: $(docker_build_conn)
+        intototask: ${{ variables.Int_intototask }}
+        OWASP: ${{ variables.Int_OWASP }}
+        servicenow: ${{ variables.servicenow }}
+        url: $(url)
+        reporter: $(reporter)
+        assignedto: $(assignedto)
+        username: $(username)
+        password: $(password)
+        boards: ${{ variables.boards }}
+        bug_person_name: $(bug_person_name)
+        bug_person_email: $(bug_person_email)
+        jira: ${{ variables.jira }}
+        JiraDomain: $(JiraDomain)
+        JiraUsername: $(JiraUsername)
+        JiraApiToken: $(JiraApiToken)
+        JiraProjectKey: $(JiraProjectKey)
+        JiraAssigneeUsername: $(JiraAssigneeUsername)
+        selenium2: ${{ variables.Int_selenium }}
+        selenium_folder: $(selenium_folder)
+        selenium: ${{ variables.Int_selenium }}
+        selenium_file: ${{ variables.Int_selenium_file }}
+        LoadTest: ${{ variables.Int_LoadTest }}
+        Azure_Service_Connection: ${{ variables.Int_Azure_Service_Connection }}
+        loadTest_ConfigFile: ${{ variables.Int_loadTestConfigFile }}
+        Azure_resourceGroup: ${{ variables.Int_Azure_resourceGroup }}
+        loadTest_Resource: ${{ variables.Int_loadTestResource }}
+        loadTest_RunName: ${{ variables.Int_loadTestRunName }} 
+
+- stage: QA
+  # dependsOn: DEV
+  jobs:
+    - template: deployment_template/rolling.yaml
+      parameters:
+        environmentName: QA
+        approver: $(QA_approver)
+        kubernetes_service_connection: $(QA_kubernetes_service_connection)
+        namespace: $(QA_namespace)
+        deployment_file: $(helm_name_QA)
+        docker_build_conn: $(docker_build_conn)
+        intototask: ${{ variables.QA_intototask }}
+        OWASP: ${{ variables.QA_OWASP }}
+        servicenow: ${{ variables.servicenow }}
+        url: $(url)
+        reporter: $(reporter)
+        assignedto: $(assignedto)
+        username: $(username)
+        password: $(password)
+        boards: ${{ variables.boards }}
+        bug_person_name: $(bug_person_name)
+        bug_person_email: $(bug_person_email)
+        jira: ${{ variables.jira }}
+        JiraDomain: $(JiraDomain)
+        JiraUsername: $(JiraUsername)
+        JiraApiToken: $(JiraApiToken)
+        JiraProjectKey: $(JiraProjectKey)
+        JiraAssigneeUsername: $(JiraAssigneeUsername)
+        selenium2: ${{ variables.QA_selenium }}
+        selenium_folder: $(selenium_folder)
+        selenium: ${{ variables.QA_selenium }}
+        selenium_file: ${{ variables.QA_selenium_file }}
+        LoadTest: ${{ variables.QA_LoadTest }}
+        Azure_Service_Connection: ${{ variables.QA_Azure_Service_Connection }}
+        loadTest_ConfigFile: ${{ variables.QA_loadTestConfigFile }}
+        Azure_resourceGroup: ${{ variables.QA_Azure_resourceGroup }}
+        loadTest_Resource: ${{ variables.QA_loadTestResource }}
+        loadTest_RunName: ${{ variables.QA_loadTestRunName }}
+
+- stage: Prod
+  # dependsOn: QA
+  jobs:
+    - template: deployment_template/rolling.yaml
+      parameters:
+        environmentName: Prod
+        approver: $(Prod_approver)
+        kubernetes_service_connection: $(Prod_kubernetes_service_connection)
+        namespace: $(Prod_namespace)
+        deployment_file: $(helm_name_Prod)
+        docker_build_conn: $(docker_build_conn)
+        intototask: ${{ variables.Prod_intototask }}
+        OWASP: ${{ variables.Prod_OWASP }}
+        servicenow: ${{ variables.servicenow }}
+        url: $(url)
+        reporter: $(reporter)
+        assignedto: $(assignedto)
+        username: $(username)
+        password: $(password)
+        boards: ${{ variables.boards }}
+        bug_person_name: $(bug_person_name)
+        bug_person_email: $(bug_person_email)
+        jira: ${{ variables.jira }}
+        JiraDomain: $(JiraDomain)
+        JiraUsername: $(JiraUsername)
+        JiraApiToken: $(JiraApiToken)
+        JiraProjectKey: $(JiraProjectKey)
+        JiraAssigneeUsername: $(JiraAssigneeUsername)
+        selenium2: ${{ variables.Prod_selenium }}
+        selenium_folder: $(selenium_folder)
+        selenium: ${{ variables.Prod_selenium }}
+        selenium_file: ${{ variables.Prod_selenium_file }}
+        LoadTest: ${{ variables.Prod_LoadTest }}
+        Azure_Service_Connection: ${{ variables.Prod_Azure_Service_Connection }}
+        loadTest_ConfigFile: ${{ variables.Prod_loadTestConfigFile }}
+        Azure_resourceGroup: ${{ variables.Prod_Azure_resourceGroup }}
+        loadTest_Resource: ${{ variables.Prod_loadTestResource }}
+        loadTest_RunName: ${{ variables.Prod_loadTestRunName }}

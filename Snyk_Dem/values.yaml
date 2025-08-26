@@ -1,0 +1,285 @@
+variables:
+
+- name: 'BROWSERSLIST_IGNORE_OLD_DATA'
+  value: true
+
+- name: imageName
+  value: "myapprepo" #Set Repository name/image name
+
+- name: domainName 
+  value: "devsecpsgithub.azurecr.io" # enter /registry domain name in lower case.
+
+#SONARQUBE
+- name: sonartask
+  value: false #set false to disable this task and true to enable Sonarqube.
+
+- name: sonar_connection    #Sonarqube
+  value: Singularity-Sonar-4 #Set Service Connection name
+
+- name: projectKey
+  value: com.unisys.CAI-CloudForte-DevSecOps:RCP-Infrastructure  #Add Project key for SonarQube (Add any variable and the same will be created in SonarQube Portal)
+
+- name: projectName
+  value: com.unisys.CAI-CloudForte-DevSecOps:RCP-Infrastructure #Add Project name for
+
+#SNYK_dependency
+- name: snykdependencytask
+  value: true #set false to disable this task and true to enable SNYK_dependency check.
+
+- name: snyk_service_connection
+  value: Snyk Connection #Snyk service connection name
+
+- name: snyk_severity
+  value: high  # severity value to check docker file(low,medium,high,critical)
+
+- name: snyksasttask
+  value: true
+
+#docker
+- name: docker_build_conn
+  value: "ACR_SC" #artifactory service connection
+
+- name: docker_repo
+  value: "myapprepo" #Artifactory repository name where images are stored
+
+#SNYK_docker
+- name: snykdockertask
+  value: true #set false to disable this task and true to enable SNYK_docker check.
+
+- name: snyk_docker_severity
+  value: high # severity value to check docker file(Low,Medium,High,Critical)
+
+#IN-TOTO
+- name: intototask
+  value: false #set false to disable this task and true to integrate IN-TOTO
+
+- name: build_intoto
+  value: false #set false to disable this task 
+- name: build_key
+  value: NF #set false to disable this task
+
+- name: test_intoto
+  value: false #set false to disable this task
+- name: test_key
+  value: NF #set false to disable this task
+
+- name: docker_intoto
+  value: false #set false to disable this task
+- name: docker_key
+  value: NF #set false to disable this task
+
+- name: trivy_intoto
+  value: false #set false to disable this task
+- name: trivy_key
+  value: NF #set false to disable this task
+
+- name: checkov_intoto
+  value: false #set false to disable this task
+- name: checkov_key
+  value: NF #set false to disable this task
+
+- name: owner_key
+  value: NF #set false to disable this task
+
+
+
+
+#grype_docker
+- name: grypetask
+  value: false #set false to disable this task and true to enable grype_docker check
+
+- name: grype_severity
+  value: Critical # severity value to check docker file(Low,Medium,High,Critical)
+
+#aqua_trivy
+- name: aquatrivytask
+  value: false #set false to disable this task 
+
+- name: aqua_severity
+  value: CRITICAL #Set Vulnerabbility severity(CRITICAL,HIGH,MEDIUM,LOW)
+
+
+- name: aqua_trivy_image
+  value: $(domainName)/$(imageName):$(Build.BuildId) #dont change this as it will take variables mentioned above in this file.
+
+#checkov
+- name: checkovtask
+  value: false #set false to disable this task 
+
+- name: checkov_policies
+  value: CKV_K8S_34,CKV_K8S_44,CKV_K8S_45 #  Add Policies from https://www.checkov.io/5.Policy%20Index/all.html
+
+
+#bug_detail
+- name: jira
+  value: true #set false to disable the integration of jira
+
+- name: JiraDomain
+  value: demotestingapp.atlassian.net # enter Jira Domain name
+
+- name: JiraUsername
+  value: shashwat2579@gmail.com #enter Jira username
+
+- name: JiraApiToken
+  value: ATATT3xFfGF0zadBNEL5WUmoPNkWHcxQiaK-s2l9tNenTwg7tCwxEJHNvNPnZ_52LnPVbV5AjdqKfv4_aX7MLexNTrXPXsJOAM-Lq2Tg6rAPTy4FYKnx2g_TFN-EcUIJlHdFAZKjx4P4tSWQ4etDCyLyLX6dQc-xooufGtTDcrrvXdvsC7XJ3q8=64A0188E #enter Jira API token
+
+- name: JiraProjectKey
+  value: DEMOTESTS   #enter Jira Project key
+
+- name: JiraAssigneeUsername
+  value: 712020:bf73ac77-8641-438b-b075-f7c9db5c4bc5 # enter the assignee username
+
+
+- name: boards
+  value: false  #set false to disable the integration of azure-boards
+  
+- name: bug_person_name
+  value: Nikitha # name of the person whom you want to assign bug if pipeline fails.
+
+- name: bug_person_email
+  value: <Nikitha.N@unisys.com>  # email of the person whom you want to assign bug if pipeline fails.
+
+
+- name: servicenow
+  value: true  #set false to disable the integration of servicenow
+
+- name: url
+  value: https://unisyssvsdemo3.service-now.com  # enter the service now url
+
+- name: reporter
+  value: chinmaya.nanda@in.unisys.com  #email address of the person who will be listed as the reporter of any issues or incidents created in ServiceNow
+
+- name: assignedto
+  value: chinmaya.nanda@in.unisys.com  # email address of the person to whom any bugs or issues should be assigned if the pipeline fails
+
+- name: username
+  value: chinmaya.nanda@in.unisys.com   #email address associated with the ServiceNow account
+
+- name: password
+  value: Welcome@123  #password associated with the ServiceNow account
+
+
+#Email 
+- name: emailtask
+  value: false #set false to disable this task 
+  
+- name: Toaddress
+  value: Nikitha.N@unisys.com #The build and pipeline details are sent to Recipients email addresses separated by semicolon
+
+
+- name: selenium
+  value: false #set false to disable this task and true to enable selenium integration
+
+- name: selenium_folder
+  value: test #set the name of selenium folder
+
+- name: selenium_IP
+  value: http://4.236.7.116:3001/  
+  
+- name: Int_kubernetes_service_connection
+  value: kubernetes_service_endpoint_dev    #name of the kubernetes service connection for integration environment
+- name: Int_namespace
+  value: int-namespace      #name of the development/integration environment
+- name: helm_name_Int
+  value: deployments/dev/deployment.yaml      # helm_name for development/integration environment
+- name: Int_intototask
+  value: false     #set false to remove the intoto task from development/integration environment
+- name: Int_OWASP
+  value: false      #set false to remove the OWASP task from development/integration environment
+- name: Int_selenium
+  value: false      #set false to remove the selenium task from development/integration environment
+- name: Int_selenium_file
+  value: selenium_test.py     #selenium test file
+        
+- name: QA_kubernetes_service_connection
+  value: kubernetes_service_endpoint_qa     #name of the kubernetes service connection for testing environment
+- name: QA_namespace
+  value: qa-namespace     #name of the testing environment
+- name: helm_name_QA
+  value: deployments/qa/deployment.yaml      # helm_name for testing environment
+- name: QA_intototask
+  value: false     #set false to remove the intoto task from testing environment
+- name: QA_OWASP
+  value: false     #set false to remove the OWASP task from testing environment
+- name: QA_selenium
+  value: false     #set false to remove the selenium task from testing environment
+- name: QA_selenium_file
+  value: selenium_test.py     #selenium test file
+
+        
+- name: Prod_kubernetes_service_connection
+  value: kubernetes_service_endpoint_prod   #name of the kubernetes service connection for production environment
+- name: Prod_namespace
+  value: prod-namespace   #name of the production environment
+- name: helm_name_Prod
+  value: deployments/prod/deployment.yaml    # helm_name for production environment
+- name: Prod_intototask
+  value: false     #set false to remove the intoto task from production environment
+- name: Prod_OWASP
+  value: false     #set false to remove the OWASP task from production environment
+- name: Prod_selenium
+  value: false     #set false to remove the selenium task from production environment
+
+#Load Testing
+- name: Int_LoadTest
+  value: false
+
+- name: Int_Azure_Service_Connection
+  value: ARM                    # Service connection for Azure resource manager
+
+- name: Int_loadTestConfigFile
+  value: config.yaml                       # Config file for Load testing
+
+- name: Int_Azure_resourceGroup
+  value: DevSecOps_RG                       # Resource Group name for Azure Cloud
+
+- name: Int_loadTestResource
+  value: javascriptlt                       # Resource name of the load test resource to be used
+
+- name: Int_loadTestRunName
+  value: loadTest                        # The name assigned to this specific load test run
+
+# QA
+- name: QA_LoadTest
+  value: false
+
+- name: QA_Azure_Service_Connection
+  value: Service Connection                           # Service connection for Azure resource manager
+
+- name: QA_loadTestConfigFile
+  value: config.yaml                       # Config file for Load testing
+
+- name: QA_Azure_resourceGroup
+  value: DevSecOps_RG                       # Resource Group name for Azure Cloud
+
+- name: QA_loadTestResource
+  value: javascriptlt                       # Resource name of the load test resource to be used
+
+- name: QA_loadTestRunName
+  value: loadTest                        # The name assigned to this specific load test run
+
+#Prod
+- name: Prod_LoadTest
+  value: false
+
+- name: Prod_Azure_Service_Connection
+  value: Service Connection                           # Service connection for Azure resource manager
+
+- name: Prod_loadTestConfigFile
+  value: config.yaml                       # Config file for Load testing
+
+- name: Prod_Azure_resourceGroup
+  value: DevSecOps_RG                       # Resource Group name for Azure Cloud
+
+- name: Prod_loadTestResource
+  value: javascriptlt                       # Resource name of the load test resource to be used
+
+- name: Prod_loadTestRunName
+  value: loadTest                        # The name assigned to this specific load test run
+
+
+
+
+
+
+#END-----------END------------END---------END

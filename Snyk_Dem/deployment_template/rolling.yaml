@@ -1,0 +1,309 @@
+parameters:
+- name: environmentName
+  type: string
+- name: approver
+  type: string
+- name: kubernetes_service_connection
+  type: string
+- name: namespace
+  type: string
+- name: deployment_file
+  type: string
+- name: docker_build_conn
+  type: string
+- name: intototask
+  type: boolean
+- name: OWASP
+  type: boolean
+- name: jira
+  type: boolean
+- name: JiraDomain
+  type: string
+  default: not_in_use
+- name: JiraUsername
+  type: string
+  default: not_in_use
+- name: JiraApiToken
+  type: string
+  default: not_in_use
+- name: JiraProjectKey
+  type: string
+  default: not_in_use
+- name: JiraAssigneeUsername
+  type: string
+  default: not_in_use
+- name: boards
+  type: boolean
+- name: bug_person_name
+  type: string
+  default: not_in_use
+- name: bug_person_email
+  type: string
+  default: not_in_use
+- name: servicenow
+  type: boolean
+- name: url
+  type: string
+  default: not_in_use
+- name: reporter
+  type: string
+  default: not_in_use
+- name: assignedto
+  type: string
+  default: not_in_use
+- name: username
+  type: string
+  default: not_in_use
+- name: password
+  type: string
+  default: not_in_use
+- name: selenium2
+  type: boolean
+- name: selenium
+  type: boolean
+- name: selenium_folder
+  type: string
+  default: not_in_use
+- name: selenium_file
+  type: string
+  default: not_in_use
+- name: LoadTest
+  type: boolean
+- name: Azure_Service_Connection
+  type: string
+- name: loadTest_ConfigFile
+  type: string
+  default: not_in_use
+- name: Azure_resourceGroup
+  type: string
+- name: loadTest_Resource
+  type: string
+  default: not_in_use
+- name: loadTest_RunName
+  type: string
+  default: not_in_use
+jobs:
+- deployment: ${{ parameters.environmentName }}
+  workspace:
+    clean: all
+  displayName: ${{ parameters.environmentName }}
+  environment: ${{ parameters.environmentName }}
+  strategy:
+    runOnce:
+      deploy:
+        steps:
+        - ${{ if eq(parameters.intototask, 'true') }}:
+          - bash: 'pip install in-toto'
+            workingDirectory: '$(Pipeline.Workspace)/drop'
+            displayName: 'Install Intoto'
+
+          # - bash: |
+          #     in-toto-verify --layout-key Akash.pub --layout root.layout
+
+          #   workingDirectory: '$(Pipeline.Workspace)/drop'
+          #   displayName: 'Intoto Verify'
+        # - task: Kubernetes@1
+        #   inputs:
+        #     connectionType: 'Kubernetes Service Connection'
+        #     kubernetesServiceEndpoint: '${{ parameters.kubernetes_service_connection }}'
+        #     namespace: '${{ parameters.namespace }}'
+        #     command: 'inline'
+        #     inline: |
+        #       az aks get-credentials --resource-group DevSecOps_RG --name devsecops --overwrite-existing
+        #       kubectl apply -f $(Pipeline.Workspace)/drop/${{ parameters.deployment_file }}
+        #     useConfigurationFile: true
+        #     configuration: '$(Pipeline.Workspace)/drop/${{ parameters.deployment_file }}'
+        #     secretType: 'dockerRegistry'
+        #     containerRegistryType: 'Container Registry'
+        #     dockerRegistryEndpoint: '${{ parameters.docker_build_conn }}'
+
+        - task: AzureCLI@2
+          displayName: Kubernetes
+          inputs:
+            azureSubscription: 'Azure'
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+                az aks get-credentials --resource-group DevSecOps_RG --name devsecops --overwrite-existing 
+                kubectl apply -f $(Pipeline.Workspace)/drop/${{ parameters.deployment_file }}
+
+        # - task: SnykSecurityScan@1
+        #   displayName: Snyk Kubernetes Config Scan
+        #   inputs:
+        #     serviceConnectionEndpoint: '$(snyk_service_connection)' # ensure this is defined in pipeline vars
+        #     testType: 'k8sconfig'
+        #     monitorWhen: 'always'
+        #     failOnIssues: false
+        #     severityThreshold: 'medium'
+        #     targetFile: '$(Pipeline.Workspace)/drop/${{ parameters.deployment_file }}'
+        #   condition: succeededOrFailed()
+
+        - ${{ if eq(parameters.OWASP, 'true') }}:
+          - bash: |
+              chmod -R 777  ./
+              docker run --rm -v $(pwd):/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py -t http://4.236.7.116:3001/ -x OWASP-ZAP-Report.xml -r scan-report.html
+              true
+              pwd
+            displayName: 'Owasp ZAP Scanning'
+          - powershell: |
+              $XslPath = "$(Pipeline.Workspace)/drop/OWASPToNUnit3.xslt"
+              $XmlInputPath = "OWASP-ZAP-Report.xml"
+              $XmlOutputPath = "Converted-OWASP-ZAP-Report.xml"
+              $XslTransform = New-Object System.Xml.Xsl.XslCompiledTransform
+              $XslTransform.Load($XslPath)
+              $XslTransform.Transform($XmlInputPath, $XmlOutputPath)
+            displayName: 'Owasp ZAP Scanning Report'
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: NUnit
+              testResultsFiles: 'Converted-OWASP-ZAP-Report.xml'
+              failTaskOnFailedTests: false
+            displayName: 'Publish Owasp ZAP Report to Test Plans'
+        - ${{ if or(eq(parameters.selenium, 'true'), eq(parameters.selenium2, 'true')) }}:
+          - bash: |
+              sudo apt update
+              sudo apt install -y wget gnupg
+              wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+              sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+              sudo apt update
+              sudo apt install google-chrome-stable
+              chromedriver --version
+              google-chrome --version
+              pip3 install selenium unittest-xml-reporting
+            displayName: 'Selenium Installation'
+            enabled: ${{ parameters.selenium }}
+          - task: PythonScript@0
+            displayName: 'Selenium testing'
+            inputs:
+              scriptPath: '$(Pipeline.Workspace)/drop/${{ parameters.selenium_folder }}/${{ parameters.selenium_file }}'
+            enabled: ${{ parameters.selenium }}
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/selenium-test-results.xml'
+              failTaskOnFailedTests: true
+            enabled: ${{ parameters.selenium }}
+
+        - ${{ if eq(parameters.LoadTest, 'true') }}:
+          - task: AzureLoadTest@1
+            inputs:
+              azureSubscription: '${{ parameters.Azure_Service_Connection }}'
+              loadTestConfigFile: '$(Pipeline.Workspace)/drop/${{ parameters.loadTest_ConfigFile }}'
+              resourceGroup: '${{ parameters.Azure_resourceGroup }}'
+              loadTestResource: '${{ parameters.loadTest_Resource }}'
+              loadTestRunName: '${{ parameters.loadTest_RunName }}' 
+
+        - ${{ if eq(parameters.boards, 'true') }}:
+          - task: CreateWorkItem@1
+            displayName: WorkItem Create On Task Fail
+            inputs:
+              teamProject: '$(System.TeamProject)'
+              workItemType: 'Bug'
+              title: 'deployment failed in $(Build.BuildNumber) in ${{ parameters.environmentName }}'
+              #assignedTo: $(Build.RequestedForId)
+              assignedTo: '${{ parameters.bug_person_name }} ${{ parameters.bug_person_email }}'
+              areaPath: '$(System.TeamProject)'
+              iterationPath: '$(System.TeamProject)'
+              associate: true
+              linkWorkItems: true
+              linkType: 'Microsoft.VSTS.Common.Affects-Reverse'
+              linkTarget: 'associate'
+              addAttachments: true
+              attachments: '**/*.log'
+              createOutputs: true
+              outputVariables: |
+                WorkItemUrl = CWI.WorkItemUrl
+                Description = Description
+            condition: failed()
+        - ${{ if eq(parameters.jira, 'true') }}:
+          - task: PythonScript@0
+            displayName: JIRA bug On Task Fail
+            inputs:
+              scriptSource: 'inline'
+              script: |
+                import requests
+                def create_jira_bug():
+                    # Jira API endpoint for creating an issue
+                    jira_url = "https://${{ parameters.JiraDomain }}/rest/api/2/issue/"
+                    # Jira API credentials
+                    username = "${{ parameters.JiraUsername }}"
+                    api_token = "${{ parameters.JiraApiToken }}"
+                    # Jira project key
+                    project_key = "${{ parameters.JiraProjectKey }}"
+                    # Assignee username or account ID
+                    assignee = "${{ parameters.JiraAssigneeUsername }}"
+                    # Bug details
+                    summary = "DEPLOYMENT FAILED IN AZURE DEVOPS FOR $(Build.Repository.Name) IN ${{ parameters.environmentName }}"
+                    description = "$(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)&view=results"
+                    # Create the payload
+                    payload = {
+                        "fields": {
+                            "project": {
+                                "key": project_key
+                            },
+                            "summary": summary,
+                            "description": description,
+                            "issuetype": {
+                                "name": "Bug"
+                            },
+                            "assignee": {
+                                "name": assignee
+                            }
+                        }
+                    }
+                    # Set the request headers
+                    headers = {
+                        "Content-Type": "application/json"
+                    }
+                    # Encode the credentials
+                    credentials = (username, api_token)
+                    # Send the POST request to create the bug
+                    response = requests.post(jira_url, json=payload, headers=headers, auth=credentials)
+                    if response.status_code == 201:
+                        print("Jira bug created successfully.")
+                        issue_key = response.json()["key"]
+                        print("Issue Key:", issue_key)
+                    else:
+                        print("Failed to create Jira bug.")
+                        print("Status Code:", response.status_code)
+                        print("Error Response:", response.text)
+                # Call the function to create a Jira bug
+                create_jira_bug()
+            condition: failed()
+        - ${{ if eq(parameters.servicenow, 'true') }}:
+          - task: PythonScript@0
+            displayName: ServiceNow Ticket On Task Fail
+            inputs:
+              scriptSource: 'inline'
+              script: |
+                import requests
+                import base64
+                # Set your ServiceNow instance URL, username, and password
+                service_now_instance = "${{ parameters.url }}"
+                username = "${{ parameters.username }}"
+                password = "${{ parameters.password }}"
+                # Define API endpoint and headers
+                api_endpoint = "incident.do?JSONv2"
+                url = f"{service_now_instance}/{api_endpoint}"
+                headers = {
+                    "Authorization": "Basic " + base64.b64encode(f"{username}:{password}".encode('ascii')).decode('ascii'),
+                    "Content-Type": "application/json"
+                }
+                # Define payload for request
+                payload = {
+                    "sysparm_action": "insert",
+                    "category": "AzureDevOps",
+                    "impact": "2",
+                    "urgency": "2",
+                    "short_description": "Automated ticket Short Description",
+                    "description": "Automated ticket Description",
+                    "cmdb_ci": "Azure DevOps",
+                    "caller_id": "${{ parameters.reporter }}",
+                    "contact_type": "Email",
+                    "assigned_to": "${{ parameters.assignedto }}"
+                }
+                # Make the POST request
+                response = requests.post(url, json=payload, headers=headers)
+                # Print the response in JSON format
+                print(response.json())
+            condition: failed()

@@ -1,0 +1,153 @@
+variables:
+  # AWS Configuration
+  - name: aws.rolecredential.maxduration
+    value: "3600"  # Can be set from 900 - 43200s
+
+  - name: AWS_REGION
+    value: 'us-east-1'  # Change as needed
+
+  - name: ECR_REPOSITORY
+    value: 'caicwpecrint'
+
+  - name: EKS_CLUSTER_NAME
+    value: 'cai-cwp-eks-int'
+
+  - name: IMAGE_TAG
+    value: '$(Build.BuildId)'
+    
+  - name: AWS_Accountid
+    value: '175438534346'
+  
+  - name: AWS_QA_Accountid
+    value: '508126907316'
+
+  # CAI Cwp Dev Environment Details
+  
+  - name: caiCwpECRName
+    value: 'caicwpecrint'
+
+  - name: caiCwpDevServiceConnection
+    value: aws-oidc-federation-dev
+    
+  - name: caiCwpDevEksClusterName
+    value: 'cai-cwp-eks-int'
+
+  - name: caiCwpDevNamespaceName
+    value: 'cai-cwp-aiops-soln-dev'    
+
+  # CAI Cwp QA Environment Details
+  
+  - name: caiCwpQaECRName
+    value: 'caicwpecrqa'
+
+  - name: caiCwpQaServiceConnection
+    value: aws-oidc-federation-qa
+    
+  - name: caiCwpQaEksClusterName
+    value: 'cai-cwp-eks-qa'
+
+  - name: caiCwpQaNamespaceName
+    value: 'cai-cwp-aiops-soln-qa'  
+
+
+  # Approval Environment Details
+  - name: approval_environment_name
+    value: AWS-Approval
+  
+  # Artifactory details
+  - name: tag
+    value: '$(Build.BuildId)'  # Image Tag
+
+  - name: imageName
+    value: ps-studentcompanion-be  # Set Repository name/image name
+
+  # SONARQUBE
+  - name: sonartask
+    value: false  # set false to disable this task 
+
+  - name: sonar_connection
+    value: Singularity-Sonar-4  # Set Service Connection name
+
+  - name: projectKey
+    value: com.unisys.CAI-CloudForte-DevSecOps:RCP-Infrastructure  # Project key for SonarQube
+
+  - name: projectName
+    value: com.unisys.CAI-CloudForte-DevSecOps:RCP-Infrastructure  # Project name for SonarQube
+
+  - name: sonar_source
+    value: '.'  # Path relative to sonar-project.properties
+
+  - name: sourceFolder
+    value: '.'
+
+  - name: sonar_quality_file
+    value: sonar.ps1  # Provided by Unisys delivered package
+
+  - name: SonarServerName
+    value: https://ustr-sonar-3.na.uis.unisys.com  # SonarQube server URL
+
+  - name: SonarProjectKey
+    value: xxxx  # Same project key as above
+
+  - name: SonarToken
+    value: ''  # SonarQube Personal Access Token
+  
+  # JavaScript Tool Installer
+  - name: version
+    value: '14.x'  # JavaScript/Node.js version
+
+  # Checkov
+  - name: checkovtask
+    value: true
+
+  - name: checkov_policies
+    value: CKV_K8S_34,CKV_K8S_44,CKV_K8S_45  # Checkov policies
+
+  # Docker Build
+  - name: dockerfile_location
+    value: Dockerfile
+
+  - name: docker_repo
+    value: $(imageName)  # don't edit this
+
+  # AQUA TRIVY
+  - name: aquatrivytask
+    value: true  # set false to disable this task 
+
+  - name: aqua_severity
+    value: HIGH,CRITICAL  # Vulnerability severity levels
+
+  - name: aqua_trivy_image
+    value: $(domainName)/$(imageName):$(tag)  # Don't change
+
+  # HELM Update
+  - name: helm_dev_development
+    value: deployments/dev/deployment.yaml
+
+  - name: helm_qa_development
+    value: deployments/qa/deployment.yaml
+
+  - name: helm_rcp_demo_development
+    value: kubernetes/demo/deployment.yml
+
+  - name: helm_rcp_dev_development
+    value: kubernetes/rcp_dev/deployment.yml  # Deployment file path
+
+  - name: helm_Csu_Uat_development
+    value: kubernetes/uat/deployment.yml    
+
+  # Bug detail
+  - name: bug_person_name
+    value: Akash  # Name to assign bugs
+
+  - name: bug_person_email
+    value: <akash.maurya@unisys.com>
+
+  # Email
+  - name: emailtask
+    value: false  # set false to disable this task 
+
+  - name: Toaddress
+    value: 'akash.maurya@unisys.com'  # Recipients separated by semicolon
+
+# END-------------END-----------END---------END

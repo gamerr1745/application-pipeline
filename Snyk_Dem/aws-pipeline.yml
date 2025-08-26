@@ -1,0 +1,375 @@
+trigger:
+  - none
+
+variables:
+  - template: aws_values.yml
+
+stages:
+  - stage: Sonar_Scan
+    displayName: 'Sonar Analysis'
+    jobs:
+      - job: sonar
+        pool: singularity-agent-pool
+        displayName: Sonar Analysis
+        steps:   
+        - script: 
+            sudo apt-get -y install unzip && 
+            npm cache clean --force
+
+        - task: SonarQubePrepare@7
+          inputs:
+            SonarQube: 'Singularity-Sonar-4'
+            scannerMode: 'CLI'
+            configMode: 'manual'
+            cliProjectKey: '${{ variables.projectKey }}'
+            cliProjectName: '${{ variables.projectName }}'
+            cliSources: '.'
+            extraProperties: |
+              # sonar.exclusions=**/*.bin
+              sonar.sources=.
+
+        #--------- Run Code Analysis task ---------
+        - task: SonarQubeAnalyze@7
+          inputs:
+            jdkversion: 'JAVA_HOME'
+
+
+        #-------Publish Quality Gate Result task--------
+        - task: SonarQubePublish@7
+          inputs:
+            pollingTimeoutSec: '300'
+
+  - stage: Cai_Cwp_Dev_Build
+    displayName: 'AWS Dev Build Stage'
+    dependsOn: Sonar_Scan
+    jobs:
+      - job: ImageAndArtifactBuild
+        pool:
+          name: AWS_agents_pool
+        steps:
+          - task: AWSCLI@1
+            displayName: "Running aws-cli get-caller-identity"
+            inputs:
+              awsCredentials: "${{ variables.caiCwpDevServiceConnection }}"
+              regionName: '${{ variables.AWS_REGION }}'
+              awsCommand: 'sts'
+              awsSubCommand: 'get-caller-identity'
+
+          - task: AWSShellScript@1
+            displayName: "ECR login"
+            inputs:
+              awsCredentials: '${{ variables.caiCwpDevServiceConnection }}'
+              regionName: '${{ variables.AWS_REGION }}'
+              scriptType: 'inline'
+              inlineScript: |
+                aws sts get-caller-identity
+                aws ecr get-login-password \
+                  --region '${{ variables.AWS_REGION }}' | docker login \
+                  --username AWS \
+                  --password-stdin ${{ variables.AWS_Accountid }}.dkr.ecr.${{ variables.AWS_REGION }}.amazonaws.com
+
+
+          - task: Docker@2
+            displayName: 'Build Docker Image'
+            inputs:
+              repository: '${{ variables.caiCwpECRName }}'
+              command: 'build'
+              Dockerfile: '**/Dockerfile'
+              tags: |
+                ${{ variables.IMAGE_TAG }}
+                latest
+
+          - task: ECRPushImage@1
+            displayName: 'Push Docker Image to ECR'
+            inputs:
+              awsCredentials: '${{ variables.caiCwpDevServiceConnection }}'
+              regionName: '${{ variables.AWS_REGION }}'
+              imageSource: 'imagename'
+              sourceImageName: '${{ variables.caiCwpECRName }}'
+              sourceImageTag: '${{ variables.IMAGE_TAG }}'
+              repositoryName: '${{ variables.caiCwpECRName }}'
+              pushTag: '${{ variables.IMAGE_TAG }}'
+
+          - task: Bash@3
+            displayName: Install Trivy
+            enabled: ${{ variables.aquatrivytask }}
+            inputs:
+              targetType: 'inline'
+              script: |
+                sudo apt-get update -y
+                sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+                curl -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy-archive-keyring.gpg > /dev/null
+                echo "deb [signed-by=/usr/share/keyrings/trivy-archive-keyring.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
+                  | sudo tee /etc/apt/sources.list.d/trivy.list
+                sudo apt-get update -y
+                sudo apt-get install -y trivy
+          - task: Bash@3
+            displayName: Trivy Scan
+            enabled: ${{ variables.aquatrivytask }}
+            continueOnError: true
+            inputs:
+              targetType: 'inline'
+              script: |
+                trivy image --exit-code 1 --severity ${{ variables.aqua_severity }} --scanners vuln ${{ variables.caiCwpECRName }}:${{ variables.IMAGE_TAG }}
+
+          - task: CmdLine@2
+            displayName: 'Update Image in Manifest'
+            inputs:
+              script: |
+                FULL_IMAGE="${{ variables.AWS_Accountid }}.dkr.ecr.${{ variables.AWS_REGION }}.amazonaws.com/${{ variables.caiCwpECRName }}:${{ variables.IMAGE_TAG }}"
+                sed "s|appimages|$FULL_IMAGE|g" $(System.DefaultWorkingDirectory)/${{ variables.helm_dev_development }} > temp.yaml
+                mv temp.yaml $(System.DefaultWorkingDirectory)/${{ variables.helm_dev_development }}
+
+          - task: CmdLine@2
+            displayName: Run Checkov
+            enabled: ${{ variables.checkovtask }}
+            inputs:
+              script: |
+                sudo apt-get update
+                sudo apt-get install -y python3-venv
+                python3 -m venv checkov_env
+                source checkov_env/bin/activate
+                pip install --upgrade pip
+                pip install checkov
+                checkov -f ${{ variables.helm_dev_development }} -c ${{ variables.checkov_policies }}
+                deactivate
+
+          - task: CopyFiles@2
+            inputs:
+              Contents: ${{ variables.helm_dev_development }}
+              TargetFolder: '$(build.artifactstagingdirectory)'
+
+          # - task: CopyFiles@2
+          #   displayName: Add OWASP File
+          #   inputs:
+          #     Contents: OWASPToNUnit3.xslt
+          #     TargetFolder: '$(build.artifactstagingdirectory)'
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              PathtoPublish: '$(build.artifactstagingdirectory)'
+              ArtifactName: 'drop'
+              publishLocation: 'Container'
+
+          - task: CreateWorkItem@1
+            displayName: Create Bug on Failure
+            condition: failed()
+            inputs:
+              teamProject: '$(System.TeamProject)'
+              workItemType: 'Bug'
+              title: 'Build failed in $(Build.BuildNumber)'
+              assignedTo: '${{ variables.bug_person_name }} ${{ variables.bug_person_email }}'
+              areaPath: '$(System.TeamProject)'
+              iterationPath: '$(System.TeamProject)'
+              associate: true
+              linkWorkItems: true
+              linkType: 'Microsoft.VSTS.Common.Affects-Reverse'
+              linkTarget: 'associate'
+              addAttachments: true
+              attachments: '**/*.log'
+
+          - bash: |
+              cd /home/vsts/work/_tasks/EmailReport_*/1.1.8
+              cp ./index.js ./Index.js
+              sed -i -e "s~\\\\\\\\~/~" ./htmlreport/HTMLReportCreator.js
+              sed -i -e "s~\\\\\\\\~/~" ./model/helpers/LinkHelper.js
+            displayName: Fix Email Report
+            condition: succeededOrFailed()
+            enabled: ${{ variables.emailtask }}
+
+          - task: EmailReport@1
+            displayName: Send Email Report
+            condition: succeededOrFailed()
+            enabled: ${{ variables.emailtask }}
+            inputs:
+              sendMailConditionConfig: 'Always'
+              subject: 'Pipeline status for Build $(Build.BuildNumber)'
+              toAddress: '${{ variables.Toaddress }}'
+              defaultDomain: 'microsoft.com'
+              groupTestResultsBy: 'run'
+              includeCommits: true
+              maxTestFailuresToShow: '15'
+              includeOthersInTotal: false
+              usePreviousEnvironment: false
+              smtpConnectionEndpoint: 'Email Report'
+
+  - stage: Dev_Deploy
+    displayName: 'AWS Dev Deploy Stage'
+    dependsOn: Cai_Cwp_Dev_Build
+    jobs:
+      - deployment: 'Approval'
+        environment: ${{ variables.approval_environment_name }}
+
+      - job: DeployJob
+        pool:
+          name: AWS_agents_pool        
+        displayName: 'Deploy to EKS'
+        steps:
+          - task: CmdLine@2
+            displayName: 'Update Manifest with Image'
+            inputs:
+              script: |
+                FULL_IMAGE="${{ variables.AWS_Accountid }}.dkr.ecr.${{ variables.AWS_REGION }}.amazonaws.com/${{ variables.caiCwpECRName }}:${{ variables.IMAGE_TAG }}"
+                sed "s|appimages|$FULL_IMAGE|g" $(System.DefaultWorkingDirectory)/${{ variables.helm_dev_development }} > temp.yaml
+                mv temp.yaml $(System.DefaultWorkingDirectory)/${{ variables.helm_dev_development }}
+
+          - task: AWSShellScript@1
+            displayName: "kubectl apply"
+            inputs:
+              awsCredentials: '${{ variables.caiCwpDevServiceConnection }}'
+              regionName: '${{ variables.AWS_REGION }}'
+              scriptType: 'inline'
+              inlineScript: |
+                kubectl apply -f $(System.DefaultWorkingDirectory)/${{ variables.helm_dev_development }} -n ${{ variables.caiCwpDevNamespaceName }}
+
+  - stage: Cai_Cwp_Qa_Build
+    displayName: 'AWS Qa Build Stage'
+    dependsOn: Sonar_Scan
+    jobs:
+      - job: ImageAndArtifactBuild
+        pool:
+          name: qa_AWS_agents_pool
+        steps:
+          - task: AWSCLI@1
+            displayName: "Running aws-cli get-caller-identity"
+            inputs:
+              awsCredentials: "${{ variables.caiCwpQaServiceConnection }}"
+              regionName: '${{ variables.AWS_REGION }}'
+              awsCommand: 'sts'
+              awsSubCommand: 'get-caller-identity'
+
+          - task: AWSShellScript@1
+            displayName: "ECR login"
+            inputs:
+              awsCredentials: '${{ variables.caiCwpQaServiceConnection }}'
+              regionName: '${{ variables.AWS_REGION }}'
+              scriptType: 'inline'
+              inlineScript: |
+                aws sts get-caller-identity
+                aws ecr get-login-password \
+                  --region '${{ variables.AWS_REGION }}' | docker login \
+                  --username AWS \
+                  --password-stdin ${{ variables.AWS_QA_Accountid }}.dkr.ecr.${{ variables.AWS_REGION }}.amazonaws.com
+
+
+          - task: Docker@2
+            displayName: 'Build Docker Image'
+            inputs:
+              repository: '${{ variables.caiCwpQaECRName }}'
+              command: 'build'
+              Dockerfile: '**/Dockerfile'
+              tags: |
+                ${{ variables.IMAGE_TAG }}
+                latest
+
+          - task: ECRPushImage@1
+            displayName: 'Push Docker Image to ECR'
+            inputs:
+              awsCredentials: '${{ variables.caiCwpQaServiceConnection }}'
+              regionName: '${{ variables.AWS_REGION }}'
+              imageSource: 'imagename'
+              sourceImageName: '${{ variables.caiCwpQaECRName }}'
+              sourceImageTag: '${{ variables.IMAGE_TAG }}'
+              repositoryName: '${{ variables.caiCwpQaECRName }}'
+              pushTag: '${{ variables.IMAGE_TAG }}'
+
+
+          - task: CmdLine@2
+            displayName: 'Update Image in Manifest'
+            inputs:
+              script: |
+                FULL_IMAGE="${{ variables.AWS_QA_Accountid }}.dkr.ecr.${{ variables.AWS_REGION }}.amazonaws.com/${{ variables.caiCwpQaECRName }}:${{ variables.IMAGE_TAG }}"
+                sed "s|appimages|$FULL_IMAGE|g" $(System.DefaultWorkingDirectory)/${{ variables.helm_qa_development }} > temp.yaml
+                mv temp.yaml $(System.DefaultWorkingDirectory)/${{ variables.helm_qa_development }}
+
+
+          - task: CopyFiles@2
+            inputs:
+              Contents: ${{ variables.helm_qa_development }}
+              TargetFolder: '$(build.artifactstagingdirectory)'
+
+          - task: CopyFiles@2
+            displayName: Add OWASP File
+            inputs:
+              Contents: OWASPToNUnit3.xslt
+              TargetFolder: '$(build.artifactstagingdirectory)'
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              PathtoPublish: '$(build.artifactstagingdirectory)'
+              ArtifactName: 'drop'
+              publishLocation: 'Container'
+
+          - task: CreateWorkItem@1
+            displayName: Create Bug on Failure
+            condition: failed()
+            inputs:
+              teamProject: '$(System.TeamProject)'
+              workItemType: 'Bug'
+              title: 'Build failed in $(Build.BuildNumber)'
+              assignedTo: '${{ variables.bug_person_name }} ${{ variables.bug_person_email }}'
+              areaPath: '$(System.TeamProject)'
+              iterationPath: '$(System.TeamProject)'
+              associate: true
+              linkWorkItems: true
+              linkType: 'Microsoft.VSTS.Common.Affects-Reverse'
+              linkTarget: 'associate'
+              addAttachments: true
+              attachments: '**/*.log'
+
+          - bash: |
+              cd /home/vsts/work/_tasks/EmailReport_*/1.1.8
+              cp ./index.js ./Index.js
+              sed -i -e "s~\\\\\\\\~/~" ./htmlreport/HTMLReportCreator.js
+              sed -i -e "s~\\\\\\\\~/~" ./model/helpers/LinkHelper.js
+            displayName: Fix Email Report
+            condition: succeededOrFailed()
+            enabled: ${{ variables.emailtask }}
+
+          - task: EmailReport@1
+            displayName: Send Email Report
+            condition: succeededOrFailed()
+            enabled: ${{ variables.emailtask }}
+            inputs:
+              sendMailConditionConfig: 'Always'
+              subject: 'Pipeline status for Build $(Build.BuildNumber)'
+              toAddress: '${{ variables.Toaddress }}'
+              defaultDomain: 'microsoft.com'
+              groupTestResultsBy: 'run'
+              includeCommits: true
+              maxTestFailuresToShow: '15'
+              includeOthersInTotal: false
+              usePreviousEnvironment: false
+              smtpConnectionEndpoint: 'Email Report'
+
+  - stage: QA_Deploy
+    displayName: 'AWS Qa Deploy Stage'
+    dependsOn: Cai_Cwp_Qa_Build
+    jobs:
+      - deployment: 'Approval'
+        environment: ${{ variables.approval_environment_name }}
+
+      - job: DeployJob
+        pool:
+          name: qa_AWS_agents_pool      
+        displayName: 'Deploy to EKS'
+        steps:
+          - task: CmdLine@2
+            displayName: 'Update Image in Manifest'
+            inputs:
+              script: |
+                FULL_IMAGE="${{ variables.AWS_QA_Accountid }}.dkr.ecr.${{ variables.AWS_REGION }}.amazonaws.com/${{ variables.caiCwpQaECRName }}:${{ variables.IMAGE_TAG }}"
+                sed "s|appimages|$FULL_IMAGE|g" $(System.DefaultWorkingDirectory)/${{ variables.helm_qa_development }} > temp.yaml
+                mv temp.yaml $(System.DefaultWorkingDirectory)/${{ variables.helm_qa_development }}
+
+          - task: AWSShellScript@1
+            displayName: "kubectl apply"
+            inputs:
+              awsCredentials: '${{ variables.caiCwpQaServiceConnection }}'
+              regionName: '${{ variables.AWS_REGION }}'
+              scriptType: 'inline'
+              inlineScript: |
+                aws --region us-east-1 eks update-kubeconfig --name cai-cwp-eks-qa --role-arn arn:aws:iam::508126907316:role/cai-cwp-eks-qa-eks-admin-role
+                kubectl apply -f $(System.DefaultWorkingDirectory)/${{ variables.helm_qa_development }} -n ${{ variables.caiCwpQaNamespaceName }} --validate=false
+
+
