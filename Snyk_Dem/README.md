@@ -24,9 +24,15 @@ This recipe is in the book Practical MLOps.
 
 ## Build and Run Docker Container
 
+
+
 * Install [Docker Desktop](https://www.docker.com/products/docker-desktop)
 
+* 
+
 * To build the image locally do the following.
+
+
 
 `docker build -t flask-change:latest .` or run `make build` which has the same command.
 
