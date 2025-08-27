@@ -16,6 +16,9 @@ This recipe is in the book Practical MLOps.
 
 ## Get Started
 
+
+
+
 * Create Python virtual environment `python3 -m venv ~/.kube-hello && source ~/.kube-hello/bin/activate`
 * Run `make all` to install python libraries, lint project, including `Dockerfile` and run tests
 
