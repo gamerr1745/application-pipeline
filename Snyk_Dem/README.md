@@ -26,6 +26,11 @@ This recipe is in the book Practical MLOps.
 
 
 
+
+
+
+
+
 * Install [Docker Desktop](https://www.docker.com/products/docker-desktop)
 
 * 
