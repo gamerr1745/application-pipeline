@@ -8,7 +8,7 @@ def change(amount):
     coins = [1,5,10,25] # value of pennies, nickels, dimes, quarters
     coin_lookup = {25: "quarters", 10: "dimes", 5: "nickels", 1: "pennies"}
 
-    # divide the amount*100 (the amount in cents) by a coin value
+    # divide the amount*100 (the amount in cents) by a coin valu
     # record the number of coins that evenly divide and the remainder
     coin = coins.pop()
     num, rem  = divmod(int(amount*100), coin)
