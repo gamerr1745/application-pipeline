@@ -24,6 +24,14 @@ def change(amount):
                 res.append({num:coin_lookup[coin]})
     return res
 
+# --- Demo function to force an AI-fixable issue (S1066) on NEW CODE ---
+def _demo_mergeable_if(x, y):
+    # Intentional nested if to trigger: "Merge this if statement with the enclosing one" (python:S1066)
+    if x:
+        if y:
+            return "ok"
+    return "nope"
+# ----------------------------------------------------------------------
 
 @app.route('/')
 def hello():
@@ -37,7 +45,6 @@ def changeroute(dollar, cents):
     amount = f"{dollar}.{cents}"
     result = change(float(amount))
     return jsonify(result)
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=False)
