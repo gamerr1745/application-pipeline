@@ -17,7 +17,7 @@ jobs:
       - name: SonarCloud Scan
         uses: SonarSource/sonarcloud-github-action@v2
         with:
-          projectBaseDir: .   # if your code is in Snyk_Dem, change to: Snyk_Dem
+          projectBaseDir: Snyk_Dem   # if your code is in Snyk_Dem, change to: Snyk_Dem
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
